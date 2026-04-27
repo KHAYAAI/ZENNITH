@@ -11,11 +11,11 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 criterion = { workspace = true, optional = true }
-# halo2_proofs = { version = "0.3", optional = true }
+rand = "0.8"
+sha2 = "0.10"
 
 [features]
 default = []
-# halo2-support = ["halo2_proofs"]
 gpu = []
 
 [dev-dependencies]
