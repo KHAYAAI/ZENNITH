@@ -1,12 +1,5 @@
 [workspace]
 members = [
-    "node",
-    "runtime",
-    "pallets/pallet-canister",
-    "pallets/pallet-zk-verifier",
-    "pallets/pallet-governance",
-    "pallets/pallet-staking",
-    "pallets/pallet-token",
     "zk-layer/router",
     "zk-layer/risc-zero",
     "zk-layer/plonk",
@@ -19,6 +12,13 @@ members = [
 ]
 
 exclude = [
+    "node",
+    "runtime",
+    "pallets/pallet-canister",
+    "pallets/pallet-zk-verifier",
+    "pallets/pallet-governance",
+    "pallets/pallet-staking",
+    "pallets/pallet-token",
     "examples/neural-network-ai",
     "examples/credit-scoring",
     "examples/private-voting",

@@ -91,6 +91,9 @@ pub mod pallet {
     pub type CanisterCount<T: Config> = StorageValue<_, u64, ValueQuery>;
 
     #[pallet::storage]
+    pub type CallIdCounter<T: Config> = StorageValue<_, u64, ValueQuery>;
+
+    #[pallet::storage]
     #[pallet::getter(fn canisters)]
     pub type Canisters<T: Config> = StorageMap<
         _,
@@ -322,11 +325,10 @@ pub mod pallet {
         }
 
         fn next_call_id() -> CallId {
-            use sp_runtime::traits::Zero;
-            let current: CallId = sp_std::cell::RefCell::new(0)
-                .take()
-                .saturating_add(1);
-            current
+            let current = CallIdCounter::<T>::get();
+            let next = current.saturating_add(1);
+            CallIdCounter::<T>::set(next);
+            next
         }
     }
 }
