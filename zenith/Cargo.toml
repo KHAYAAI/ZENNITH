@@ -1,0 +1,99 @@
+[workspace]
+members = [
+    "node",
+    "runtime",
+    "pallets/pallet-canister",
+    "pallets/pallet-zk-verifier",
+    "pallets/pallet-governance",
+    "pallets/pallet-staking",
+    "pallets/pallet-token",
+    "zk-layer/router",
+    "zk-layer/risc-zero",
+    "zk-layer/plonk",
+    "zk-layer/cairo",
+    "zk-layer/aggregator",
+    "canister-runtime",
+    "gateway",
+    "sdk/rust",
+    "zenith-cli",
+]
+
+resolver = "2"
+
+[workspace.package]
+authors = ["Zenith Team"]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/khayaai/zennith"
+version = "0.1.0"
+
+[workspace.dependencies]
+# Core dependencies
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async/Web
+axum = "0.7"
+hyper = "1.0"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
+indicatif = "0.17"
+colored = "2.1"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Serialization
+bincode = "1.3"
+base64 = "0.22"
+hex = "0.4"
+
+# Cryptography (basic, ZK systems have their own)
+sha2 = "0.10"
+blake3 = "1.5"
+
+# Benchmarking
+criterion = "0.5"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utils
+once_cell = "1.19"
+parking_lot = "0.12"
+futures = "0.3"
+async-trait = "0.1"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Substrate (minimal - specific versions in pallet crates)
+codec = { package = "parity-scale-codec", version = "3.6", features = ["derive"] }
+
+# ZK Libraries (these are major dependencies)
+# Note: These versions should be carefully selected and coordinated
+# For initial setup, we'll use available versions - may need adjustment
+
+# RISC Zero - using published crate
+# risc0-zkvm = "1.0"  # Check latest version at crates.io
+
+# Halo2/Plonk - using halo2_proofs
+# halo2_proofs = "0.3"  # May need version adjustment
+
+# Cairo - using Starkware verifier
+# stark_verifier = "0.1"  # May need to find appropriate crate
+
+# Wasm
+wasmtime = "18.0"
+wasmparser = "0.121"
+
+# Prometheus metrics
+prometheus = "0.13"
+
+# Testing utilities
+mockall = "0.12"
+tempfile = "3.10"

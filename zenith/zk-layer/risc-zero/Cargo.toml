@@ -1,0 +1,17 @@
+[package]
+name = "zk-risc-zero"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# risc0-zkvm = { version = "1.0", optional = true }
+
+[features]
+default = []
+# risc0-support = ["risc0-zkvm"]

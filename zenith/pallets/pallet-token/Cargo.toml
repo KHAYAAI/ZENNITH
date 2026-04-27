@@ -1,0 +1,21 @@
+[package]
+name = "pallet-token"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+codec = { workspace = true }
+serde = { workspace = true }
+scale-info = { version = "2.10", features = ["derive"] }
+
+[features]
+default = ["std"]
+std = [
+    "codec/std",
+    "serde/std",
+    "scale-info/std",
+]
+runtime-benchmarks = []
+try-runtime = []

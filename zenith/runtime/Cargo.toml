@@ -1,0 +1,33 @@
+[package]
+name = "zenith-runtime"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+codec = { workspace = true }
+serde = { workspace = true }
+scale-info = { version = "2.10", features = ["derive"] }
+
+# Note: Full Substrate runtime integration will be completed in Prompt 2
+# The following dependencies are properly versioned in the full implementation:
+# - frame-benchmarking
+# - frame-executive
+# - frame-support
+# - frame-system
+# - pallet-* modules
+# - sp-* primitives
+
+[features]
+default = ["std"]
+std = [
+    "codec/std",
+    "serde/std",
+    "scale-info/std",
+]
+runtime-benchmarks = []
+try-runtime = []
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]

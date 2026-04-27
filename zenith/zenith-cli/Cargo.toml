@@ -1,0 +1,29 @@
+[package]
+name = "zenith-cli"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[[bin]]
+name = "zenith"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+hyper = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+colored = { workspace = true }
+indicatif = { workspace = true }
+uuid = { workspace = true }
+toml = "0.8"
+
+zenith-sdk = { path = "../sdk/rust" }
+
+[features]
+default = []

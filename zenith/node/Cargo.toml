@@ -1,0 +1,28 @@
+[package]
+name = "zenith-node"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[[bin]]
+name = "zenith-node"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+
+# Note: Full Substrate node integration will be completed in Prompt 2
+# Substrate dependencies (sc-cli, sc-service, sp-runtime, etc.) will be
+# added with proper versions during full node implementation
+
+[features]
+default = []
+runtime-benchmarks = []
+try-runtime = []
