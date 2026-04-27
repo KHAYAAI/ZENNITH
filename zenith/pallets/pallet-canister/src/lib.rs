@@ -38,6 +38,19 @@ pub enum CanisterStatus {
     Deleted,
 }
 
+#[derive(Clone, Copy, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub enum ProverSystem {
+    RiscZero,
+    Plonk,
+    Cairo,
+}
+
+#[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct RoutingInfo {
+    pub system: ProverSystem,
+    pub score: u32,
+}
+
 #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 #[codec(mel_bound())]
 pub struct CallRequest<AccountId> {
@@ -114,6 +127,10 @@ pub mod pallet {
     #[pallet::storage]
     pub type CallResults<T: Config> =
         StorageMap<_, Blake2_128Concat, CallId, CallResult, OptionQuery>;
+
+    #[pallet::storage]
+    pub type PendingRoutings<T: Config> =
+        StorageMap<_, Blake2_128Concat, CallId, RoutingInfo, OptionQuery>;
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -222,12 +239,42 @@ pub mod pallet {
             let request = CallRequest {
                 canister_id,
                 caller: who.clone(),
-                method,
+                method: method.clone(),
                 input,
                 gas_limit,
             };
 
+            // Route to appropriate ZK system based on method name heuristic
+            let method_str = core::str::from_utf8(&method)
+                .unwrap_or("")
+                .to_lowercase();
+
+            let (prover_system, score) = if method_str.contains("infer")
+                || method_str.contains("forward")
+                || method_str.contains("neural")
+                || method_str.contains("predict")
+            {
+                // Neural network inference → Plonk (good for matmul-heavy operations)
+                (ProverSystem::Plonk, 85)
+            } else if method_str.contains("evaluate")
+                || method_str.contains("score")
+                || method_str.contains("calculate")
+                || method_str.contains("credit")
+            {
+                // Arithmetic-heavy operations → Cairo
+                (ProverSystem::Cairo, 75)
+            } else {
+                // Default: RISC Zero (universal, works for everything)
+                (ProverSystem::RiscZero, 100)
+            };
+
+            let routing = RoutingInfo {
+                system: prover_system,
+                score,
+            };
+
             PendingCalls::<T>::insert(call_id, request);
+            PendingRoutings::<T>::insert(call_id, routing);
 
             Self::deposit_event(Event::CallQueued {
                 call_id,
@@ -329,6 +376,14 @@ pub mod pallet {
             let next = current.saturating_add(1);
             CallIdCounter::<T>::set(next);
             next
+        }
+
+        pub fn get_routing_info(call_id: CallId) -> Option<RoutingInfo> {
+            PendingRoutings::<T>::get(call_id)
+        }
+
+        pub fn get_pending_call(call_id: CallId) -> Option<CallRequest<T::AccountId>> {
+            PendingCalls::<T>::get(call_id)
         }
     }
 }
