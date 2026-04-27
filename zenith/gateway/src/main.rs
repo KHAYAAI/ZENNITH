@@ -29,9 +29,20 @@ struct Args {
     node_rpc: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ProverRecord {
+    prover_id: String,
+    node_address: String,
+    gpu_count: u64,
+    stake_amount: u64,
+    status: String,
+    registered_at: String,
+}
+
 #[derive(Clone)]
 struct AppState {
     requests: Arc<RwLock<Vec<DeployRequest>>>,
+    provers: Arc<RwLock<Vec<ProverRecord>>>,
     rpc_url: String,
     ready: Arc<tokio::sync::Mutex<bool>>,
     rpc_client: Arc<SubstrateRpcClient>,
@@ -266,7 +277,124 @@ async fn get_proof(Path(proof_hash): Path<String>) -> Json<serde_json::Value> {
     }))
 }
 
+async fn list_canisters(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let requests = state.requests.read().await;
+    let list: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "status": r.status,
+                "cycles": r.cycles,
+                "created_at": r.created_at,
+            })
+        })
+        .collect();
+    Json(json!(list))
+}
+
+async fn get_canister(
+    State(state): State<AppState>,
+    Path(canister_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let requests = state.requests.read().await;
+    match requests.iter().find(|r| r.id == canister_id) {
+        Some(r) => (
+            StatusCode::OK,
+            Json(json!({
+                "id": r.id,
+                "status": r.status,
+                "cycles": r.cycles,
+                "created_at": r.created_at,
+                "calls": [],
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "canister not found", "id": canister_id })),
+        ),
+    }
+}
+
+async fn stop_canister(
+    State(state): State<AppState>,
+    Path(canister_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut requests = state.requests.write().await;
+    match requests.iter_mut().find(|r| r.id == canister_id) {
+        Some(r) => {
+            r.status = "stopped".to_string();
+            info!("Stopped canister: {}", canister_id);
+            (StatusCode::OK, Json(json!({ "id": canister_id, "status": "stopped" })))
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "canister not found", "id": canister_id })),
+        ),
+    }
+}
+
+async fn submit_proof(
+    Json(payload): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let proof_bytes = payload["proof_base64"].as_str().unwrap_or("");
+    let prover_system = payload["prover_system"].as_str().unwrap_or("unknown");
+    let canister_id = payload["canister_id"].as_str().unwrap_or("");
+
+    if proof_bytes.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "proof_base64 is required" })),
+        );
+    }
+
+    // Derive a deterministic proof hash from the submitted bytes
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    proof_bytes.hash(&mut h);
+    let proof_hash = format!("{:016x}{:016x}", h.finish(), h.finish());
+
+    info!(
+        "Received proof {} for canister {} via {} prover",
+        proof_hash, canister_id, prover_system
+    );
+
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "proof_hash": proof_hash,
+            "canister_id": canister_id,
+            "prover_system": prover_system,
+            "status": "submitted",
+        })),
+    )
+}
+
+async fn list_provers(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let provers = state.provers.read().await;
+    let list: Vec<serde_json::Value> = provers
+        .iter()
+        .map(|p| {
+            json!({
+                "prover_id": p.prover_id,
+                "node_address": p.node_address,
+                "gpu_count": p.gpu_count,
+                "stake_amount": p.stake_amount,
+                "status": p.status,
+                "registered_at": p.registered_at,
+            })
+        })
+        .collect();
+    Json(json!(list))
+}
+
 async fn register_prover(
+    State(state): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     let node_address = payload["node_address"]
@@ -275,14 +403,26 @@ async fn register_prover(
         .to_string();
     let gpu_count = payload["gpu_count"].as_u64().unwrap_or(0);
     let stake = payload["stake_amount"].as_u64().unwrap_or(0);
+    let prover_id = uuid::Uuid::new_v4().to_string();
 
     info!(
-        "Registered prover at {} with {} GPUs, {} ZEN stake",
-        node_address, gpu_count, stake
+        "Registered prover {} at {} with {} GPUs, {} ZEN stake",
+        prover_id, node_address, gpu_count, stake
     );
 
+    let record = ProverRecord {
+        prover_id: prover_id.clone(),
+        node_address: node_address.clone(),
+        gpu_count,
+        stake_amount: stake,
+        status: "registered".to_string(),
+        registered_at: chrono::Local::now().to_rfc3339(),
+    };
+
+    state.provers.write().await.push(record);
+
     Json(json!({
-        "prover_id": uuid::Uuid::new_v4().to_string(),
+        "prover_id": prover_id,
         "status": "registered",
         "node_address": node_address,
         "gpu_count": gpu_count
@@ -330,6 +470,7 @@ async fn main() {
 
     let state = AppState {
         requests: Arc::new(RwLock::new(Vec::new())),
+        provers: Arc::new(RwLock::new(Vec::new())),
         rpc_url: rpc_url.clone(),
         ready: Arc::new(tokio::sync::Mutex::new(false)),
         rpc_client,
@@ -350,19 +491,26 @@ async fn main() {
         .route("/v1/metrics", get(metrics))
         .route(
             "/v1/canisters",
-            post(deploy_canister).with_state(state.clone()),
+            get(list_canisters).post(deploy_canister),
+        )
+        .route(
+            "/v1/canisters/:canister_id",
+            get(get_canister).delete(stop_canister),
         )
         .route(
             "/v1/canisters/:canister_id/call/:method",
-            post(call_canister).with_state(state.clone()),
+            post(call_canister),
         )
         .route(
             "/v1/canisters/:canister_id/calls/:call_id",
             get(get_call_result),
         )
+        .route("/v1/proofs", post(submit_proof))
         .route("/v1/proofs/:proof_hash", get(get_proof))
         .route("/v1/proofs/:proof_hash/verify", get(verify_proof))
-        .route("/v1/provers/register", post(register_prover));
+        .route("/v1/provers", get(list_provers))
+        .route("/v1/provers/register", post(register_prover))
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&args.listen)
         .await

@@ -186,7 +186,8 @@ pub mod pallet {
             let canister_id = Self::next_canister_id();
 
             let wasm_hash = <T as frame_system::Config>::Hashing::hash(&wasm);
-            let wasm_hash_bytes: [u8; 32] = [0u8; 32];
+            let mut wasm_hash_bytes = [0u8; 32];
+            wasm_hash_bytes.copy_from_slice(wasm_hash.as_ref());
 
             let canister = Canister {
                 id: canister_id,

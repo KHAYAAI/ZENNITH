@@ -37,6 +37,8 @@ impl CanisterExecutor {
         config.wasm_multi_value(true);
         config.wasm_reference_types(true);
         config.async_support(false);
+        // Enable fuel metering for real gas tracking
+        config.consume_fuel(true);
 
         let engine = wasmtime::Engine::new(&config)
             .map_err(|e| RuntimeError::ExecutionFailed(format!("Failed to create engine: {}", e)))?;
@@ -77,58 +79,75 @@ impl CanisterExecutor {
 
         let module = self.module_cache.get(&hash_str).unwrap();
 
-        // Create instance and linker
+        // Create store with fuel for gas metering
         let mut store = wasmtime::Store::new(&self.engine, ());
+        store.set_fuel(gas_limit)
+            .map_err(|e| RuntimeError::ExecutionFailed(format!("Failed to set fuel: {}", e)))?;
+
         let mut linker = wasmtime::Linker::new(&self.engine);
 
-        // Add required WASI-like imports (empty stub)
-        linker.func_wrap("env", "log", |_: i32| {
-            // Stub for logging
-        }).map_err(|e| RuntimeError::ExecutionFailed(e.to_string()))?;
+        // Host environment functions for canister ABI
+        linker.func_wrap("env", "log", |_: i32, _: i32| {}).ok();
+        linker.func_wrap("env", "abort", |_: i32, _: i32, _: i32, _: i32| {}).ok();
+        linker.func_wrap("env", "panic", |_: i32, _: i32| {}).ok();
 
         let instance = linker.instantiate(&mut store, module)
             .map_err(|e| RuntimeError::ExecutionFailed(format!("Instantiation failed: {}", e)))?;
 
-        // Look up exported function
-        // Try to call with (i32, i32) -> i32 signature first
-        if let Ok(func) = instance.get_typed_func::<(i32, i32), i32>(&mut store, method) {
-            let input_ptr = if input.len() >= 4 {
-                u32::from_le_bytes([input[0], input[1], input[2], input[3]]) as i32
+        // Try calling with (ptr: i32, len: i32) -> (out_ptr: i32, out_len: i32) signature
+        // This is the standard canister ABI for reading from/writing to Wasm memory
+        let output = if let Ok(func) = instance.get_typed_func::<(i32, i32), (i32, i32)>(&mut store, method) {
+            let memory = instance.get_memory(&mut store, "memory");
+            if let Some(mem) = memory {
+                // Write input into Wasm linear memory at offset 0
+                if !input.is_empty() {
+                    mem.write(&mut store, 0, input)
+                        .map_err(|e| RuntimeError::MemoryViolation)?;
+                }
+                let (out_ptr, out_len) = func.call(&mut store, (0, input.len() as i32))
+                    .map_err(|e| RuntimeError::ExecutionFailed(format!("Call failed: {}", e)))?;
+                // Read output from Wasm memory
+                let mut out = vec![0u8; out_len.max(0) as usize];
+                if out_len > 0 {
+                    mem.read(&mut store, out_ptr as usize, &mut out)
+                        .map_err(|_| RuntimeError::MemoryViolation)?;
+                }
+                out
             } else {
-                0
-            };
-            let _result = func.call(&mut store, (input_ptr, input.len() as i32))
-                .map_err(|e| RuntimeError::ExecutionFailed(format!("Function call failed: {}", e)))?;
+                vec![]
+            }
+        } else if let Ok(func) = instance.get_typed_func::<(i32, i32), i32>(&mut store, method) {
+            // (ptr, len) -> result_code
+            let result = func.call(&mut store, (0, input.len() as i32))
+                .map_err(|e| RuntimeError::ExecutionFailed(format!("Call failed: {}", e)))?;
+            result.to_le_bytes().to_vec()
         } else if let Ok(func) = instance.get_typed_func::<(), i32>(&mut store, method) {
-            // Try parameterless function
-            let _result = func.call(&mut store, ())
-                .map_err(|e| RuntimeError::ExecutionFailed(format!("Function call failed: {}", e)))?;
+            // Parameterless -> i32
+            let result = func.call(&mut store, ())
+                .map_err(|e| RuntimeError::ExecutionFailed(format!("Call failed: {}", e)))?;
+            result.to_le_bytes().to_vec()
         } else {
-            return Err(RuntimeError::ExecutionFailed(format!("Export '{}' not found", method)));
-        }
+            return Err(RuntimeError::ExecutionFailed(format!("Export '{}' not found or incompatible signature", method)));
+        };
 
-        // Track actual gas usage (simplified: 100 gas per byte of input)
-        let gas_used = (input.len() as u64 * 100).min(gas_limit);
-
-        if gas_used > gas_limit {
-            return Err(RuntimeError::OutOfGas);
-        }
-
-        // For now, return serialized result
-        let output = format!("Executed {} on canister {:x?}", method, wasm_hash).into_bytes();
+        // Get actual fuel consumed (gas used)
+        let fuel_remaining = store.get_fuel().unwrap_or(0);
+        let gas_used = gas_limit.saturating_sub(fuel_remaining);
+        let output_len = output.len();
 
         Ok(ExecutionResult {
             output,
             gas_used,
             logs: vec![
                 format!("Method: {}", method),
-                format!("Input length: {}", input.len()),
+                format!("Input: {} bytes", input.len()),
+                format!("Output: {} bytes", output_len),
                 format!("Gas used: {}", gas_used),
             ],
         })
     }
 
-    /// Estimate gas for a call
+    /// Estimate gas for a call (without executing)
     pub fn estimate_gas(&self, wasm_bytes: &[u8], method: &str, input: &[u8]) -> u64 {
         let base_cost = 1000u64;
         let code_cost = (wasm_bytes.len() as u64) / 10;
@@ -156,26 +175,32 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_wasm() {
+    fn test_execute_wasm_minimal() {
         let mut executor = CanisterExecutor::new().unwrap();
-        // Minimal valid Wasm module with no exports
-        // This will fail during execution, but that's expected for this minimal test
+        // Minimal valid Wasm module with no exports — expect ExecutionFailed (no export)
         let wasm = b"\0asm\x01\x00\x00\x00".to_vec();
         let result = executor.execute(&[0u8; 32], &wasm, "test", b"input", 100_000);
-        // Either succeeds or fails with ExecutionFailed (both are OK for minimal module)
         match result {
-            Ok(_) => { /* success */ },
-            Err(RuntimeError::ExecutionFailed(_)) => { /* expected for minimal module */ },
+            Ok(_) => { /* unexpectedly succeeded */ },
+            Err(RuntimeError::ExecutionFailed(_)) => { /* expected: no export named "test" */ },
             Err(e) => panic!("Unexpected error: {}", e),
         }
     }
 
     #[test]
-    fn test_gas_limit_exceeded() {
+    fn test_gas_limit_zero_rejected() {
         let mut executor = CanisterExecutor::new().unwrap();
         let wasm = b"\0asm\x01\x00\x00\x00".to_vec();
         let result = executor.execute(&[0u8; 32], &wasm, "test", b"input", 0);
-        assert!(result.is_err());
+        assert!(matches!(result, Err(RuntimeError::OutOfGas)));
+    }
+
+    #[test]
+    fn test_invalid_wasm_rejected() {
+        let mut executor = CanisterExecutor::new().unwrap();
+        let not_wasm = b"not a wasm module".to_vec();
+        let result = executor.execute(&[0u8; 32], &not_wasm, "test", b"", 100_000);
+        assert!(matches!(result, Err(RuntimeError::InvalidModule)));
     }
 
     #[test]
@@ -184,5 +209,16 @@ mod tests {
         let wasm = b"\0asm\x01\x00\x00\x00".to_vec();
         let estimated = executor.estimate_gas(&wasm, "method", b"input");
         assert!(estimated > 0);
+    }
+
+    #[test]
+    fn test_module_caching() {
+        let mut executor = CanisterExecutor::new().unwrap();
+        let wasm = b"\0asm\x01\x00\x00\x00".to_vec();
+        // Two calls with the same hash should reuse the cached module (no double-compile)
+        let _ = executor.execute(&[1u8; 32], &wasm, "test", b"", 100_000);
+        let _ = executor.execute(&[1u8; 32], &wasm, "test", b"", 100_000);
+        // Cache should have exactly one entry
+        assert_eq!(executor.module_cache.len(), 1);
     }
 }
