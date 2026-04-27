@@ -6,28 +6,96 @@ edition = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
-codec = { workspace = true }
-serde = { workspace = true }
+codec = { package = "parity-scale-codec", version = "3.6", features = ["derive"] }
 scale-info = { version = "2.10", features = ["derive"] }
+serde = { workspace = true }
 
-# Note: Full Substrate runtime integration will be completed in Prompt 2
-# The following dependencies are properly versioned in the full implementation:
-# - frame-benchmarking
-# - frame-executive
-# - frame-support
-# - frame-system
-# - pallet-* modules
-# - sp-* primitives
+# Frame dependencies
+frame-benchmarking = { version = "27.0", default-features = false, optional = true }
+frame-executive = { version = "27.0", default-features = false }
+frame-support = { version = "27.0", default-features = false }
+frame-system = { version = "27.0", default-features = false }
+frame-system-benchmarking = { version = "27.0", default-features = false, optional = true }
+frame-try-runtime = { version = "0.33.0", default-features = false, optional = true }
+
+# Pallets
+pallet-balances = { version = "28.0", default-features = false }
+pallet-timestamp = { version = "26.0", default-features = false }
+pallet-transaction-payment = { version = "27.0", default-features = false }
+pallet-sudo = { version = "27.0", default-features = false }
+pallet-session = { version = "27.0", default-features = false, features = ["historical"] }
+pallet-aura = { version = "26.0", default-features = false }
+pallet-grandpa = { version = "27.0", default-features = false }
+
+# Substrate primitives
+sp-api = { version = "26.0", default-features = false }
+sp-block-builder = { version = "26.0", default-features = false }
+sp-consensus-aura = { version = "0.32.0", default-features = false, features = ["serde"] }
+sp-consensus-grandpa = { version = "13.0", default-features = false, features = ["serde"] }
+sp-core = { version = "28.0", default-features = false, features = ["serde"] }
+sp-inherents = { version = "26.0", default-features = false }
+sp-io = { version = "30.0", default-features = false }
+sp-offchain = { version = "26.0", default-features = false }
+sp-runtime = { version = "31.0", default-features = false, features = ["serde"] }
+sp-session = { version = "27.0", default-features = false }
+sp-std = { version = "14.0", default-features = false }
+sp-transaction-pool = { version = "26.0", default-features = false }
+sp-version = { version = "29.0", default-features = false, features = ["serde"] }
+
+# Local pallets
+pallet-canister = { path = "../pallets/pallet-canister", default-features = false }
+pallet-zk-verifier = { path = "../pallets/pallet-zk-verifier", default-features = false }
+pallet-governance = { path = "../pallets/pallet-governance", default-features = false }
+pallet-staking = { path = "../pallets/pallet-staking", default-features = false }
+pallet-token = { path = "../pallets/pallet-token", default-features = false }
 
 [features]
 default = ["std"]
 std = [
     "codec/std",
-    "serde/std",
+    "frame-benchmarking/std",
+    "frame-executive/std",
+    "frame-support/std",
+    "frame-system/std",
+    "frame-system-benchmarking/std",
+    "frame-try-runtime/std",
+    "pallet-aura/std",
+    "pallet-balances/std",
+    "pallet-canister/std",
+    "pallet-governance/std",
+    "pallet-grandpa/std",
+    "pallet-session/std",
+    "pallet-staking/std",
+    "pallet-sudo/std",
+    "pallet-timestamp/std",
+    "pallet-token/std",
+    "pallet-transaction-payment/std",
+    "pallet-zk-verifier/std",
     "scale-info/std",
+    "serde/std",
+    "sp-api/std",
+    "sp-block-builder/std",
+    "sp-consensus-aura/std",
+    "sp-consensus-grandpa/std",
+    "sp-core/std",
+    "sp-inherents/std",
+    "sp-io/std",
+    "sp-offchain/std",
+    "sp-runtime/std",
+    "sp-session/std",
+    "sp-std/std",
+    "sp-transaction-pool/std",
+    "sp-version/std",
 ]
-runtime-benchmarks = []
-try-runtime = []
+runtime-benchmarks = [
+    "frame-benchmarking/runtime-benchmarks",
+    "frame-system-benchmarking/runtime-benchmarks",
+    "frame-system/runtime-benchmarks",
+]
+try-runtime = [
+    "frame-try-runtime/try-runtime",
+    "frame-support/try-runtime",
+]
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

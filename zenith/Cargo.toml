@@ -18,6 +18,12 @@ members = [
     "zenith-cli",
 ]
 
+exclude = [
+    "examples/neural-network-ai",
+    "examples/credit-scoring",
+    "examples/private-voting",
+]
+
 resolver = "2"
 
 [workspace.package]
