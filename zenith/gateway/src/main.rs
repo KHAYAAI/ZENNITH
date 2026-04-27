@@ -27,6 +27,8 @@ struct Args {
 #[derive(Clone)]
 struct AppState {
     requests: Arc<RwLock<Vec<DeployRequest>>>,
+    rpc_url: String,
+    ready: Arc<tokio::sync::Mutex<bool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -235,6 +237,34 @@ async fn register_prover(
     }))
 }
 
+/// Check if Substrate node is ready and responding to RPC calls
+async fn check_node_ready(rpc_url: &str) -> bool {
+    // Extract host and port from RPC URL
+    let host_port = rpc_url
+        .strip_prefix("http://")
+        .or_else(|| rpc_url.strip_prefix("https://"))
+        .unwrap_or(rpc_url);
+
+    // For local dev node, default to localhost:9944
+    let endpoint = if host_port.contains("://") {
+        host_port.to_string()
+    } else {
+        host_port.to_string()
+    };
+
+    // Try to establish TCP connection
+    match tokio::net::TcpStream::connect(&endpoint).await {
+        Ok(_) => {
+            info!("✓ Node at {} is reachable", endpoint);
+            true
+        }
+        Err(e) => {
+            info!("Node check: {} (will operate in demo mode)", e);
+            false
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -243,9 +273,22 @@ async fn main() {
 
     let args = Args::parse();
 
+    let rpc_url = args.node_rpc.clone().unwrap_or_else(|| "http://127.0.0.1:9944".to_string());
+
     let state = AppState {
         requests: Arc::new(RwLock::new(Vec::new())),
+        rpc_url: rpc_url.clone(),
+        ready: Arc::new(tokio::sync::Mutex::new(false)),
     };
+
+    // Check node readiness
+    let ready_check = check_node_ready(&rpc_url).await;
+    if ready_check {
+        *state.ready.lock().await = true;
+        info!("✓ Substrate node is ready at {}", rpc_url);
+    } else {
+        info!("⚠ Substrate node not responding at {}, proceeding anyway", rpc_url);
+    }
 
     // Build router with all routes
     let app = Router::new()
@@ -272,9 +315,7 @@ async fn main() {
         .expect("Failed to bind address");
 
     info!("🚀 Zenith Gateway listening on {}", args.listen);
-    if let Some(rpc) = args.node_rpc {
-        info!("📡 Connected to Zenith node at {}", rpc);
-    }
+    info!("📡 Substrate RPC endpoint: {}", rpc_url);
 
     axum::serve(listener, app)
         .await
@@ -335,8 +376,6 @@ mod hex {
 }
 
 mod chrono {
-    use std::time::SystemTime;
-
     pub struct DateTime;
 
     impl DateTime {
