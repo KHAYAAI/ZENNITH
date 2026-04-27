@@ -1,0 +1,17 @@
+[package]
+name = "zenith-guest"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "add"
+path = "src/bin/add.rs"
+
+[dependencies]
+risc0-zkvm = { version = "1.0", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

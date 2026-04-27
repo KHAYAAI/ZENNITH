@@ -9,6 +9,7 @@ members = [
     "gateway",
     "sdk/rust",
     "zenith-cli",
+    "integration-tests",
 ]
 
 exclude = [

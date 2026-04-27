@@ -13,6 +13,9 @@ use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod rpc_client;
+use rpc_client::SubstrateRpcClient;
+
 #[derive(Parser, Debug)]
 #[command(name = "Zenith Gateway")]
 #[command(about = "API Gateway for Zenith Cloud")]
@@ -29,6 +32,7 @@ struct AppState {
     requests: Arc<RwLock<Vec<DeployRequest>>>,
     rpc_url: String,
     ready: Arc<tokio::sync::Mutex<bool>>,
+    rpc_client: Arc<SubstrateRpcClient>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -118,58 +122,99 @@ async fn deploy_canister(
         .to_string();
     let cycles = payload["cycles"].as_u64().unwrap_or(1_000_000);
 
-    let canister_id = format!("canister-{}", uuid::Uuid::new_v4());
-    let tx_hash = format!("0x{}", hex::encode(uuid::Uuid::new_v4().as_bytes()));
+    // Call actual blockchain RPC
+    match state.rpc_client.deploy_canister(&wasm, &init_args).await {
+        Ok(response) => {
+            let request = DeployRequest {
+                id: response.canister_id.clone(),
+                wasm_base64: wasm,
+                init_args_base64: init_args,
+                cycles,
+                created_at: chrono::Local::now().to_rfc3339(),
+                status: "deployed".to_string(),
+            };
 
-    let request = DeployRequest {
-        id: canister_id.clone(),
-        wasm_base64: wasm,
-        init_args_base64: init_args,
-        cycles,
-        created_at: chrono::Local::now().to_rfc3339(),
-        status: "deployed".to_string(),
-    };
+            let mut requests = state.requests.write().await;
+            requests.push(request);
 
-    // Store request
-    let mut requests = state.requests.write().await;
-    requests.push(request);
+            info!(
+                "Deployed canister: {} in block {}",
+                response.canister_id, response.block_number
+            );
 
-    info!("Deployed canister: {}", canister_id);
-
-    (
-        StatusCode::CREATED,
-        Json(json!({
-            "canister_id": canister_id,
-            "tx_hash": tx_hash,
-            "status": "deployed"
-        })),
-    )
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "canister_id": response.canister_id,
+                    "tx_hash": response.block_hash,
+                    "block_number": response.block_number,
+                    "status": "deployed"
+                })),
+            )
+        }
+        Err(e) => {
+            info!("Canister deployment failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": e,
+                    "status": "failed"
+                })),
+            )
+        }
+    }
 }
 
 async fn call_canister(
+    State(state): State<AppState>,
     Path((canister_id, method)): Path<(String, String)>,
     Json(payload): Json<CallRequest>,
-) -> Json<CallResponse> {
-    let call_id = format!("call-{}", uuid::Uuid::new_v4());
-
+) -> (StatusCode, Json<serde_json::Value>) {
     info!(
         "Called canister {} method {} with gas limit {}",
         canister_id, method, payload.gas_limit
     );
 
-    // Route to appropriate prover based on workload
-    let estimated_latency = match payload.gas_limit {
-        0..=100_000 => 50,      // Light computation
-        100_001..=1_000_000 => 200,   // Medium
-        _ => 1000,              // Heavy computation
-    };
+    // Call actual blockchain RPC
+    match state
+        .rpc_client
+        .call_canister(&canister_id, &method, &payload.input_base64)
+        .await
+    {
+        Ok(response) => {
+            // Route to appropriate prover based on workload
+            let estimated_latency = match payload.gas_limit {
+                0..=100_000 => 50,
+                100_001..=1_000_000 => 200,
+                _ => 1000,
+            };
 
-    Json(CallResponse {
-        call_id,
-        canister_id,
-        status: "queued".to_string(),
-        estimated_latency_ms: estimated_latency,
-    })
+            info!(
+                "Call {} queued on blockchain for canister {}",
+                response.call_id, canister_id
+            );
+
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({
+                    "call_id": response.call_id,
+                    "canister_id": canister_id,
+                    "status": response.status,
+                    "estimated_latency_ms": estimated_latency,
+                })),
+            )
+        }
+        Err(e) => {
+            info!("Call failed: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": e,
+                    "status": "failed"
+                })),
+            )
+        }
+    }
 }
 
 async fn get_call_result(
@@ -274,11 +319,13 @@ async fn main() {
     let args = Args::parse();
 
     let rpc_url = args.node_rpc.clone().unwrap_or_else(|| "http://127.0.0.1:9944".to_string());
+    let rpc_client = Arc::new(SubstrateRpcClient::new(rpc_url.clone()));
 
     let state = AppState {
         requests: Arc::new(RwLock::new(Vec::new())),
         rpc_url: rpc_url.clone(),
         ready: Arc::new(tokio::sync::Mutex::new(false)),
+        rpc_client,
     };
 
     // Check node readiness
@@ -300,7 +347,7 @@ async fn main() {
         )
         .route(
             "/v1/canisters/:canister_id/call/:method",
-            post(call_canister),
+            post(call_canister).with_state(state.clone()),
         )
         .route(
             "/v1/canisters/:canister_id/calls/:call_id",
