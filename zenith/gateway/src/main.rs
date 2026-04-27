@@ -14,7 +14,9 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod rpc_client;
+mod prover_router;
 use rpc_client::SubstrateRpcClient;
+use prover_router::ProverRouter;
 
 #[derive(Parser, Debug)]
 #[command(name = "Zenith Gateway")]
@@ -122,12 +124,16 @@ async fn deploy_canister(
         .to_string();
     let cycles = payload["cycles"].as_u64().unwrap_or(1_000_000);
 
+    // Select appropriate prover system for this workload
+    let prover = ProverRouter::select_prover(&wasm);
+    let routing_info = ProverRouter::score_workload(&wasm);
+
     // Call actual blockchain RPC
     match state.rpc_client.deploy_canister(&wasm, &init_args).await {
         Ok(response) => {
             let request = DeployRequest {
                 id: response.canister_id.clone(),
-                wasm_base64: wasm,
+                wasm_base64: wasm.clone(),
                 init_args_base64: init_args,
                 cycles,
                 created_at: chrono::Local::now().to_rfc3339(),
@@ -138,8 +144,8 @@ async fn deploy_canister(
             requests.push(request);
 
             info!(
-                "Deployed canister: {} in block {}",
-                response.canister_id, response.block_number
+                "Deployed canister: {} with prover {} in block {}",
+                response.canister_id, prover.as_str(), response.block_number
             );
 
             (
@@ -148,7 +154,9 @@ async fn deploy_canister(
                     "canister_id": response.canister_id,
                     "tx_hash": response.block_hash,
                     "block_number": response.block_number,
-                    "status": "deployed"
+                    "status": "deployed",
+                    "prover_system": prover.as_str(),
+                    "routing": routing_info,
                 })),
             )
         }
@@ -182,16 +190,14 @@ async fn call_canister(
         .await
     {
         Ok(response) => {
-            // Route to appropriate prover based on workload
-            let estimated_latency = match payload.gas_limit {
-                0..=100_000 => 50,
-                100_001..=1_000_000 => 200,
-                _ => 1000,
-            };
+            // Select prover and estimate latency based on input size
+            let input_size = payload.input_base64.len();
+            let prover = ProverRouter::select_prover(&payload.input_base64);
+            let estimated_latency = ProverRouter::estimate_proof_time(&prover, input_size);
 
             info!(
-                "Call {} queued on blockchain for canister {}",
-                response.call_id, canister_id
+                "Call {} queued on blockchain for canister {} with {} prover",
+                response.call_id, canister_id, prover.as_str()
             );
 
             (
@@ -201,6 +207,7 @@ async fn call_canister(
                     "canister_id": canister_id,
                     "status": response.status,
                     "estimated_latency_ms": estimated_latency,
+                    "prover_system": prover.as_str(),
                 })),
             )
         }
