@@ -39,6 +39,10 @@ enum Command {
         /// Initial cycles to allocate (default 1_000_000)
         #[arg(long, default_value = "1000000")]
         cycles: u64,
+
+        /// Output file for canister ID and details (optional)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
     },
 
     #[command(about = "Call a canister method")]
@@ -128,7 +132,7 @@ async fn run(command: Command, client: ZenithClient) -> Result<(), String> {
             println!("  Run: cargo build --target wasm32-unknown-unknown --release");
         }
 
-        Command::Deploy { wasm, cycles } => {
+        Command::Deploy { wasm, cycles, output } => {
             let wasm_bytes = std::fs::read(&wasm)
                 .map_err(|e| format!("Failed to read wasm file '{}': {}", wasm.display(), e))?;
 
@@ -145,6 +149,19 @@ async fn run(command: Command, client: ZenithClient) -> Result<(), String> {
             println!("  Block:         {}", result.block_number);
             println!("  Prover:        {}", result.prover_system);
             println!("  Status:        {}", result.status);
+
+            if let Some(out_path) = output {
+                let output_data = serde_json::json!({
+                    "canister_id": result.canister_id.0,
+                    "tx_hash": result.tx_hash,
+                    "block_number": result.block_number,
+                    "prover_system": result.prover_system,
+                    "status": result.status,
+                });
+                std::fs::write(&out_path, serde_json::to_string_pretty(&output_data).unwrap())
+                    .map_err(|e| format!("Failed to write output file: {}", e))?;
+                println!("  Output saved:  {}", out_path.display());
+            }
         }
 
         Command::Call { canister_id, method, arg, wait } => {
