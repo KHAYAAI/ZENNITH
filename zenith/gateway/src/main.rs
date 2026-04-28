@@ -14,16 +14,22 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod audit;
 mod auth;
+mod circuit_breaker;
 mod db;
 mod metrics;
 mod prover_router;
+mod rate_limit;
 mod rpc_client;
 
+use audit::AuditLogger;
 use auth::Claims;
+use circuit_breaker::CircuitBreaker;
 use db::{Database, DeployRequest, ProverRecord};
 use metrics::Metrics;
 use prover_router::ProverRouter;
+use rate_limit::RateLimitMiddleware;
 use rpc_client::SubstrateRpcClient;
 
 #[derive(Parser, Debug)]
@@ -47,6 +53,9 @@ struct AppState {
     ready: Arc<tokio::sync::Mutex<bool>>,
     rpc_client: Arc<SubstrateRpcClient>,
     metrics: Arc<Metrics>,
+    rate_limit: Arc<RateLimitMiddleware>,
+    circuit_breaker: Arc<CircuitBreaker>,
+    audit_logger: Arc<AuditLogger>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -489,12 +498,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let metrics = Arc::new(Metrics::new(&registry)?);
     info!("✓ Metrics initialized");
 
+    // Initialize circuit breaker for RPC calls (3 failures, 30s timeout)
+    let circuit_breaker = Arc::new(CircuitBreaker::new(3, 30));
+    info!("✓ Circuit breaker initialized");
+
+    // Initialize audit logger
+    let audit_log_path = format!("{}/audit.log", args.data_dir);
+    let audit_logger = Arc::new(AuditLogger::new(&audit_log_path)?);
+    info!("✓ Audit logger initialized at {}", audit_log_path);
+
     let state = AppState {
         db,
         rpc_url: rpc_url.clone(),
         ready: Arc::new(tokio::sync::Mutex::new(false)),
         rpc_client,
         metrics,
+        rate_limit: Arc::new(RateLimitMiddleware::new()),
+        circuit_breaker,
+        audit_logger,
     };
 
     // Check node readiness
