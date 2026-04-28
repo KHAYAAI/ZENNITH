@@ -34,7 +34,11 @@ where
     }
 }
 
-pub const JWT_SECRET: &[u8] = b"zenith-platform-secret-key-change-in-production";
+fn get_jwt_secret() -> Vec<u8> {
+    std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "zenith-platform-secret-key-change-in-production".to_string())
+        .into_bytes()
+}
 
 pub fn generate_token(sub: &str, role: &str) -> Result<String, jsonwebtoken::errors::Error> {
     use jsonwebtoken::{encode, EncodingKey, Header};
@@ -48,14 +52,14 @@ pub fn generate_token(sub: &str, role: &str) -> Result<String, jsonwebtoken::err
     encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(JWT_SECRET),
+        &EncodingKey::from_secret(&get_jwt_secret()),
     )
 }
 
 pub fn verify_token(token: &str) -> Result<TokenData<Claims>, jsonwebtoken::errors::Error> {
     decode::<Claims>(
         token,
-        &DecodingKey::from_secret(JWT_SECRET),
+        &DecodingKey::from_secret(&get_jwt_secret()),
         &Validation::default(),
     )
 }

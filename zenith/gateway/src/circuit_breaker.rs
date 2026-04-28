@@ -137,7 +137,8 @@ mod tests {
         assert_eq!(cb.get_state().await, CircuitState::Closed);
 
         // Second failure opens circuit
-        let result = cb.call(async { Err("fail".to_string()) }).await;
+        let result: Result<i32, CircuitBreakerError> =
+            cb.call(async { Err("fail".to_string()) }).await;
         assert!(result.is_err());
         assert_eq!(cb.get_state().await, CircuitState::Open);
 
