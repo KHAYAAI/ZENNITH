@@ -22,6 +22,8 @@ mod metrics;
 mod prover_router;
 mod rate_limit;
 mod rpc_client;
+mod payment;
+mod payment_api;
 
 use audit::AuditLogger;
 use auth::Claims;
@@ -31,6 +33,7 @@ use metrics::Metrics;
 use prover_router::ProverRouter;
 use rate_limit::RateLimitMiddleware;
 use rpc_client::SubstrateRpcClient;
+use payment::PaymentProcessor;
 
 #[derive(Parser, Debug)]
 #[command(name = "Zenith Gateway")]
@@ -56,6 +59,7 @@ struct AppState {
     rate_limit: Arc<RateLimitMiddleware>,
     circuit_breaker: Arc<CircuitBreaker>,
     audit_logger: Arc<AuditLogger>,
+    payment_processor: Arc<PaymentProcessor>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -507,6 +511,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audit_logger = Arc::new(AuditLogger::new(&audit_log_path)?);
     info!("✓ Audit logger initialized at {}", audit_log_path);
 
+    // Initialize payment processor
+    let payment_processor = Arc::new(PaymentProcessor::new());
+    info!("✓ Payment processor initialized");
+
     let state = AppState {
         db,
         rpc_url: rpc_url.clone(),
@@ -516,6 +524,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rate_limit: Arc::new(RateLimitMiddleware::new()),
         circuit_breaker,
         audit_logger,
+        payment_processor,
     };
 
     // Check node readiness
@@ -552,6 +561,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/proofs/:proof_hash/verify", get(verify_proof))
         .route("/v1/provers", get(list_provers))
         .route("/v1/provers/register", post(register_prover))
+        // Multi-token payment endpoints (no auth required for estimate, auth for processing)
+        .route(
+            "/v1/payment/estimate",
+            post(payment_api::estimate_price),
+        )
+        .route(
+            "/v1/payment/process",
+            post(payment_api::process_payment),
+        )
+        .route(
+            "/v1/payment/:payment_id",
+            get(payment_api::get_payment_status),
+        )
         .layer(middleware::from_fn(auth::auth_middleware))
         .with_state(state.clone());
 

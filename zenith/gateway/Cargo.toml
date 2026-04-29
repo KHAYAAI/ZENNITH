@@ -29,6 +29,7 @@ uuid = { workspace = true }
 governor = "0.7"
 lru = "0.12"
 tempfile = "3.10"
+rand = "0.8"
 
 [features]
 default = []
