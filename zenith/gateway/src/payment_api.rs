@@ -7,14 +7,14 @@
 /// - GET /v1/payment/:id/confirm - Confirm payment completed
 
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::payment::{PaymentRequest, PaymentToken};
+use crate::AppState;
 
 /// Request to estimate cost in different currencies
 #[derive(Debug, Serialize, Deserialize)]
@@ -173,11 +173,9 @@ pub async fn estimate_price(
 
 /// Process a payment
 pub async fn process_payment(
+    State(state): State<AppState>,
     Json(request): Json<ProcessPaymentRequest>,
 ) -> Result<(StatusCode, Json<ProcessPaymentResponse>), (StatusCode, String)> {
-    // Create a temporary processor for this request
-    let processor = Arc::new(crate::payment::PaymentProcessor::new());
-
     let payment_request = PaymentRequest {
         token: request.payment_token,
         amount: request.amount.clone(),
@@ -185,7 +183,8 @@ pub async fn process_payment(
         display_currency: request.display_currency,
     };
 
-    let payment_record = processor
+    let payment_record = state
+        .payment_processor
         .process_payment(payment_request)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
@@ -221,13 +220,11 @@ pub async fn process_payment(
 
 /// Get payment status
 pub async fn get_payment_status(
+    State(state): State<AppState>,
     Path(payment_id): Path<String>,
 ) -> Result<Json<PaymentStatusResponse>, (StatusCode, String)> {
-    // Create a temporary processor for this request
-    // In production, would retrieve from database instead
-    let processor = Arc::new(crate::payment::PaymentProcessor::new());
-
-    let payment = processor
+    let payment = state
+        .payment_processor
         .get_payment(&payment_id)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, e))?;

@@ -16,6 +16,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod audit;
 mod auth;
+mod chainlink;
 mod circuit_breaker;
 mod db;
 mod metrics;
@@ -24,6 +25,8 @@ mod rate_limit;
 mod rpc_client;
 mod payment;
 mod payment_api;
+mod payment_db;
+mod uniswap;
 
 use audit::AuditLogger;
 use auth::Claims;
@@ -511,9 +514,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audit_logger = Arc::new(AuditLogger::new(&audit_log_path)?);
     info!("✓ Audit logger initialized at {}", audit_log_path);
 
-    // Initialize payment processor
-    let payment_processor = Arc::new(PaymentProcessor::new());
-    info!("✓ Payment processor initialized");
+    // Initialize payment processor with database
+    let payment_db_path = format!("{}/payments", args.data_dir);
+    let payment_processor = Arc::new(PaymentProcessor::new(&payment_db_path)?);
+    info!("✓ Payment processor initialized at {}", payment_db_path);
 
     let state = AppState {
         db,

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use tracing;
 
 /// Supported payment tokens
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +130,8 @@ pub struct PriceOracle {
     cache: Arc<RwLock<HashMap<String, PriceCacheEntry>>>,
     /// Cache TTL in seconds
     cache_ttl: u64,
+    /// Chainlink oracle client for real prices
+    chainlink: crate::chainlink::ChainlinkOracleClient,
 }
 
 #[derive(Clone)]
@@ -142,6 +145,7 @@ impl PriceOracle {
         PriceOracle {
             cache: Arc::new(RwLock::new(HashMap::new())),
             cache_ttl: 60, // 1 minute
+            chainlink: crate::chainlink::ChainlinkOracleClient::new(),
         }
     }
 
@@ -188,48 +192,48 @@ impl PriceOracle {
         Ok(price)
     }
 
-    /// Fetch price from Chainlink or other oracle
+    /// Fetch price from Chainlink oracle with fallback to mock prices
     async fn fetch_price_from_oracle(
         &self,
         from_token: PaymentToken,
         to_token: PaymentToken,
     ) -> Result<f64, String> {
-        // This would call Chainlink Oracle or price feed
-        // For now, return mock prices
+        // Try to get real prices from Chainlink
+        match self
+            .chainlink
+            .get_conversion_rate(from_token, to_token)
+            .await
+        {
+            Ok(price) => return Ok(price),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to fetch price from Chainlink: {}. Using fallback prices.",
+                    e
+                );
+            }
+        }
+
+        // Fallback to mock prices if Chainlink is unavailable
         match (from_token, to_token) {
-            (PaymentToken::Usdc, PaymentToken::Zen) => {
-                // 1 USDC = ~50 ZEN (example)
-                Ok(50.0)
-            }
-            (PaymentToken::Zen, PaymentToken::Usdc) => {
-                // 1 ZEN = ~0.02 USDC
-                Ok(0.02)
-            }
-            (PaymentToken::Dai, PaymentToken::Zen) => {
-                // 1 DAI ≈ 1 USDC ≈ 50 ZEN
-                Ok(50.0)
-            }
-            (PaymentToken::Zen, PaymentToken::Dai) => {
-                Ok(0.02)
-            }
+            (PaymentToken::Usdc, PaymentToken::Zen) => Ok(50.0),
+            (PaymentToken::Zen, PaymentToken::Usdc) => Ok(0.02),
+            (PaymentToken::Dai, PaymentToken::Zen) => Ok(50.0),
+            (PaymentToken::Zen, PaymentToken::Dai) => Ok(0.02),
             _ => Err("Price pair not supported".to_string()),
         }
     }
 }
 
-/// DEX Swapper (for converting USDC → ZEN)
+/// DEX Swapper (for converting USDC/DAI → ZEN via Uniswap V3)
 pub struct DexSwapper {
-    /// Uniswap V3 router address on Polygon
-    router_address: String,
-    /// Slippage tolerance (0.5%)
-    slippage_tolerance: f64,
+    /// Uniswap V3 router
+    router: crate::uniswap::UniswapV3Router,
 }
 
 impl DexSwapper {
     pub fn new() -> Self {
         DexSwapper {
-            router_address: "0xE592427A0AEce92De3Edee1F18E0157C05861564".to_string(), // Uniswap V3 Router on Polygon
-            slippage_tolerance: 0.005, // 0.5%
+            router: crate::uniswap::UniswapV3Router::new("https://polygon-rpc.com"),
         }
     }
 
@@ -241,25 +245,29 @@ impl DexSwapper {
         amount: String,
         price_oracle: &PriceOracle,
     ) -> Result<SwapResult, String> {
-        // Get current price
+        // Get current price from oracle
         let price = price_oracle.get_price(from_token, to_token).await?;
 
-        // Calculate expected output
-        let input_amount: f64 = amount.parse().map_err(|_| "Invalid amount")?;
-        let expected_output = input_amount * price;
+        // Get quote from Uniswap
+        let quote = self
+            .router
+            .get_swap_quote(from_token, to_token, amount.clone(), price)
+            .await?;
 
-        // Apply slippage tolerance
-        let minimum_output = expected_output * (1.0 - self.slippage_tolerance);
+        // Execute the swap (in production, this submits to the blockchain)
+        let swap_result = self
+            .router
+            .execute_swap(from_token, to_token, &quote, "0x0")
+            .await?;
 
         Ok(SwapResult {
             from_token,
             to_token,
-            input_amount: amount.clone(),
-            output_amount: expected_output.to_string(),
-            minimum_output: minimum_output.to_string(),
-            execution_price: price,
-            // In real implementation, would execute actual Uniswap swap
-            tx_hash: format!("0x{:x}", rand::random::<u64>()),
+            input_amount: swap_result.input_amount,
+            output_amount: swap_result.output_amount,
+            minimum_output: quote.minimum_output,
+            execution_price: swap_result.execution_price,
+            tx_hash: swap_result.tx_hash,
         })
     }
 }
@@ -279,17 +287,20 @@ pub struct SwapResult {
 pub struct PaymentProcessor {
     oracle: Arc<PriceOracle>,
     swapper: Arc<DexSwapper>,
-    /// Storage for payment records
-    payment_records: Arc<RwLock<HashMap<String, PaymentRecord>>>,
+    /// Persistent payment record storage
+    payment_db: Arc<crate::payment_db::PaymentDb>,
 }
 
 impl PaymentProcessor {
-    pub fn new() -> Self {
-        PaymentProcessor {
+    pub fn new(db_path: &str) -> Result<Self, String> {
+        Ok(PaymentProcessor {
             oracle: Arc::new(PriceOracle::new()),
             swapper: Arc::new(DexSwapper::new()),
-            payment_records: Arc::new(RwLock::new(HashMap::new())),
-        }
+            payment_db: Arc::new(
+                crate::payment_db::PaymentDb::new(db_path)
+                    .map_err(|e| format!("Failed to open payment database: {}", e))?,
+            ),
+        })
     }
 
     /// Process a payment request
@@ -315,12 +326,7 @@ impl PaymentProcessor {
                 completed_at: None,
             };
 
-            // Store record
-            {
-                let mut records = self.payment_records.write().await;
-                records.insert(payment_id.clone(), record.clone());
-            }
-
+            self.payment_db.insert(&payment_id, &record)?;
             return Ok(record);
         }
 
@@ -344,21 +350,14 @@ impl PaymentProcessor {
             completed_at: None,
         };
 
-        // Store record
-        {
-            let mut records = self.payment_records.write().await;
-            records.insert(payment_id.clone(), record.clone());
-        }
-
+        self.payment_db.insert(&payment_id, &record)?;
         Ok(record)
     }
 
     /// Get payment record by ID
     pub async fn get_payment(&self, payment_id: &str) -> Result<PaymentRecord, String> {
-        let records = self.payment_records.read().await;
-        records
-            .get(payment_id)
-            .cloned()
+        self.payment_db
+            .get(payment_id)?
             .ok_or_else(|| "Payment not found".to_string())
     }
 
@@ -368,10 +367,8 @@ impl PaymentProcessor {
         payment_id: &str,
         status: PaymentStatus,
     ) -> Result<PaymentRecord, String> {
-        let mut records = self.payment_records.write().await;
-        let mut record = records
-            .get(payment_id)
-            .cloned()
+        let mut record = self.payment_db
+            .get(payment_id)?
             .ok_or_else(|| "Payment not found".to_string())?;
 
         record.status = status;
@@ -379,7 +376,7 @@ impl PaymentProcessor {
             record.completed_at = Some(Utc::now());
         }
 
-        records.insert(payment_id.to_string(), record.clone());
+        self.payment_db.insert(payment_id, &record)?;
         Ok(record)
     }
 }
