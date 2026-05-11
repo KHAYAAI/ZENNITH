@@ -1,0 +1,55 @@
+[Unit]
+Description=Zenith Validator Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zenith
+Group=zenith
+
+# Environment variables
+EnvironmentFile=/etc/zenith/validator.env
+Environment="RUST_LOG=zenith_node=info,substrate=warn"
+
+# Start command
+ExecStart=/opt/zenith/zenith-node \
+  --name zenith-validator-${HOSTNAME} \
+  --validator \
+  --chain mainnet \
+  --base-path /data/validator \
+  --port 30333 \
+  --rpc-port 9944 \
+  --rpc-external \
+  --ws-external \
+  --unsafe-rpc-external \
+  --log info,zenith=debug \
+  --pruning archive \
+  --telemetry-url 'wss://telemetry.polkadot.io/submit/ 0' \
+  --offchain-worker always \
+  --enable-offchain-computing
+
+# Process management
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+# Resource limits
+MemoryMax=16G
+CPUQuota=80%
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Security
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/data/validator /var/log/zenith
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zenith-validator
+
+[Install]
+WantedBy=multi-user.target

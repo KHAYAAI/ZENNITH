@@ -1,0 +1,48 @@
+[Unit]
+Description=Zenith Gateway API
+After=network-online.target zenith-validator.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zenith
+Group=zenith
+
+# Environment variables
+EnvironmentFile=/etc/zenith/gateway.env
+Environment="RUST_LOG=zenith_gateway=info,hyper=warn"
+
+# Start command
+ExecStart=/opt/zenith/zenith-gateway \
+  --listen 0.0.0.0:8000 \
+  --node-rpc ws://${ZENITH_VALIDATOR_RPC:-localhost:9944} \
+  --data-dir /data/gateway \
+  --log info
+
+# Process management
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60s
+
+# Health check
+ExecHealthCheck=curl -f http://localhost:8000/health || exit 1
+
+# Resource limits
+MemoryMax=32G
+CPUQuota=200%
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Security
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/data/gateway /var/log/zenith
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zenith-gateway
+
+[Install]
+WantedBy=multi-user.target
